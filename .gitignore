@@ -1,0 +1,14 @@
+# Python Virtual Environment
+rl_env/
+
+# Python cache files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# OS files
+.DS_Store
+
+# IDE specific (optional)
+.vscode/
