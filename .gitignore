@@ -11,4 +11,5 @@ __pycache__/
 .DS_Store
 
 # IDE specific (optional)
-.vscode/
+.vscode/__pycache__/
+*.py[cod]
