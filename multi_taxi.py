@@ -29,7 +29,7 @@ class TaxiTwoPassengerEnv(TaxiEnv):
         self.observation_space = TaxiTwoPassengerEnv.observation_space
         self.window, self.clock = None, None
         self.passenger_in_taxi: int | None = None  # 0,1, or None
-        self.obstacles = {(1, 1), (3, 3)} //locations of obstacles
+        self.obstacles = {(1, 1), (3, 3)} #locations of obstacles
 
     @staticmethod
     def encode(r: int, c: int, p1: int, d1: int, p2: int | None = None, d2: int | None = None) -> int:
