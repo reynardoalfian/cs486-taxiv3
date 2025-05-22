@@ -29,6 +29,7 @@ class TaxiTwoPassengerEnv(TaxiEnv):
         self.observation_space = TaxiTwoPassengerEnv.observation_space
         self.window, self.clock = None, None
         self.passenger_in_taxi: int | None = None  # 0,1, or None
+        self.obstacles = {(1, 1), (3, 3)} #locations of obstacles
 
     @staticmethod
     def encode(r: int, c: int, p1: int, d1: int, p2: int | None = None, d2: int | None = None) -> int:
@@ -102,6 +103,7 @@ class TaxiTwoPassengerEnv(TaxiEnv):
         return int(self.s), reward, terminated, False, {}
 
     def _move(self, row: int, col: int, action: int):
+        new_row, new_col = row, col
         illegal = 0
         if action == 0 and row < 4:
             row += 1
@@ -114,6 +116,10 @@ class TaxiTwoPassengerEnv(TaxiEnv):
         else:
             if action in (2, 3):
                 illegal = -10
+        if (new_row, new_col) in self.obstacles:
+            illegal = -10
+            return row, col, illegal
+        
         return row, col, illegal
 
     def _render_gui(self, mode):
@@ -124,6 +130,8 @@ class TaxiTwoPassengerEnv(TaxiEnv):
             pygame.display.set_caption("Taxi – Two Passengers")
         if self.clock is None:
             self.clock = pygame.time.Clock()
+
+        
         WHITE, BLACK = (255,255,255), (0,0,0)
         YELLOW, ORANGE = (255,255,0), (255,165,0)
         RED, GREEN, BLUE = (255,0,0), (0,200,0), (0,0,255)
@@ -131,6 +139,11 @@ class TaxiTwoPassengerEnv(TaxiEnv):
         self.window.fill(WHITE)
         for c in range(6): pygame.draw.line(self.window, BLACK, (c*cell_w,0), (c*cell_w,cell_h*5),border)
         for r in range(6): pygame.draw.line(self.window, BLACK, (0,r*cell_h), (cell_w*5,r*cell_h),border)
+
+        GRAY = (160, 160, 160)
+        for (r, c) in self.obstacles:
+            obs_rect = pygame.Rect(c*cell_w+10, r*cell_h+10, cell_w-20, cell_h-20)
+            pygame.draw.rect(self.window, GRAY, obs_rect)
         row, col, p1, d1, p2, d2 = self.decode6(self.s)
         dest_colors = [RED, GREEN, YELLOW, BLUE]
         for idx,(rr,cc) in enumerate(self.locs):
@@ -156,6 +169,8 @@ class TaxiTwoPassengerEnv(TaxiEnv):
             ("Passenger 1","Black circle"),
             ("Passenger 2","Orange circle"),
             ("Destinations","Colored squares"),
+            ("Obstacle", "Gray square"),
+
         ]
         for i,(title,desc) in enumerate(legends):
             txt = font.render(f"{title}: {desc}", True, BLACK)
