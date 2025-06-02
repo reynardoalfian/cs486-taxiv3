@@ -28,8 +28,9 @@ class TaxiTwoPassengerEnv(TaxiEnv):
         super().__init__(render_mode=render_mode)
         self.observation_space = TaxiTwoPassengerEnv.observation_space
         self.window, self.clock = None, None
-        self.passenger_in_taxi: int | None = None  # 0,1, or None
+        self.passenger_in_taxi: int | None = None  # 0,1, or None (stores index 0 or 1)
         self.obstacles = {(1, 1), (3, 3)} #locations of obstacles
+        self.passengers_delivered = [False, False] # [passenger1_delivered, passenger2_delivered]
 
     @staticmethod
     def encode(r: int, c: int, p1: int, d1: int, p2: int | None = None, d2: int | None = None) -> int:
@@ -67,6 +68,7 @@ class TaxiTwoPassengerEnv(TaxiEnv):
 
     def reset(self, *, seed: int | None = None, options=None):
         self.passenger_in_taxi = None
+        self.passengers_delivered = [False, False]
         orig_mode, self.render_mode = self.render_mode, None
         super().reset(seed=seed)
         self.render_mode = orig_mode
@@ -78,49 +80,107 @@ class TaxiTwoPassengerEnv(TaxiEnv):
 
     def step(self, action: int):
         assert self.action_space.contains(action)
-        reward, terminated = -1, False
+        reward, terminated = -1, False # Default reward is -1 per step
         r, c, p1, d1, p2, d2 = self.decode6(self.s)
+
+        # Store current taxi, passenger locations, and passenger in taxi status for reward shaping
+        old_r, old_c = r, c
+        old_p1_loc, old_p2_loc = p1, p2 # Store passenger locations BEFORE action
+        old_passenger_in_taxi = self.passenger_in_taxi
+
+        # Movement and illegal move penalties
         r, c, illegal = self._move(r, c, action)
         reward += illegal
-        if action == 4:
-            if p1 < 4 and (r, c) == self.locs[p1]:
-                p1, self.passenger_in_taxi = 4, 0
-            elif p2 < 4 and (r, c) == self.locs[p2]:
-                p2, self.passenger_in_taxi = 4, 1
-            else:
-                reward = -10
-        elif action == 5:
+
+        if action == 4: # Pickup action
+            if self.passenger_in_taxi is None: # Only allow pickup if taxi is empty
+                if p1 < 4 and (r, c) == self.locs[p1] and not self.passengers_delivered[0]:
+                    p1, self.passenger_in_taxi = 4, 0
+                    reward += 10 # Increased reward for successful pickup
+                elif p2 < 4 and (r, c) == self.locs[p2] and not self.passengers_delivered[1]:
+                    p2, self.passenger_in_taxi = 4, 1
+                    reward += 10 # Increased reward for successful pickup
+                else:
+                    reward = -10 # Illegal pickup (no passenger at location or already delivered)
+            else: # Taxi already has a passenger
+                reward = -10 # Illegal pickup
+        elif action == 5: # Dropoff action
             if self.passenger_in_taxi == 0 and p1 == 4 and (r, c) == self.locs[d1]:
-                p1, reward, self.passenger_in_taxi = d1, +20, None
+                p1, self.passenger_in_taxi = d1, None
+                self.passengers_delivered[0] = True
+                reward = +20 # Large reward for delivering passenger 1
             elif self.passenger_in_taxi == 1 and p2 == 4 and (r, c) == self.locs[d2]:
-                p2, reward, self.passenger_in_taxi = d2, +20, None
+                p2, self.passenger_in_taxi = d2, None
+                self.passengers_delivered[1] = True
+                reward = +20 # Large reward for delivering passenger 2
             else:
-                reward = -10
+                reward = -10 # Illegal dropoff
+
         self.s = self.encode(r, c, p1, d1, p2, d2)
         self.state = self.s
-        if p1 == d1 and p2 == d2:
+
+        # --- Reward Shaping for movement progress ---
+        # Reward for moving closer to a passenger
+        if old_passenger_in_taxi is None: # Only if taxi is empty
+            # Check for passenger 1
+            if old_p1_loc < 4 and not self.passengers_delivered[0]:
+                target_row, target_col = self.locs[old_p1_loc]
+                old_dist = abs(target_row - old_r) + abs(target_col - old_c)
+                new_dist = abs(target_row - r) + abs(target_col - c)
+                if new_dist < old_dist:
+                    reward += 1 # More substantial reward for moving closer to an available passenger
+            # Check for passenger 2
+            if old_p2_loc < 4 and not self.passengers_delivered[1]:
+                target_row, target_col = self.locs[old_p2_loc]
+                old_dist = abs(target_row - old_r) + abs(target_col - old_c)
+                new_dist = abs(target_row - r) + abs(target_col - c)
+                if new_dist < old_dist:
+                    reward += 1 # More substantial reward for moving closer to an available passenger
+        else: # If a passenger is in the taxi, reward for moving closer to *their* destination
+            if old_passenger_in_taxi == 0 and not self.passengers_delivered[0]: # Passenger 1 in taxi
+                target_row, target_col = self.locs[d1]
+                old_dist = abs(target_row - old_r) + abs(target_col - old_c)
+                new_dist = abs(target_row - r) + abs(target_col - c)
+                if new_dist < old_dist:
+                    reward += 1 # More substantial reward for moving closer to the destination
+            elif old_passenger_in_taxi == 1 and not self.passengers_delivered[1]: # Passenger 2 in taxi
+                target_row, target_col = self.locs[d2]
+                old_dist = abs(target_row - old_r) + abs(target_col - old_c)
+                new_dist = abs(target_row - r) + abs(target_col - c)
+                if new_dist < old_dist:
+                    reward += 1 # More substantial reward for moving closer to the destination
+
+        # Episode terminates only if *both* passengers are delivered
+        if self.passengers_delivered[0] and self.passengers_delivered[1]:
             terminated = True
+            # A final bonus for completing the overall task
+            reward += 100 # Significant bonus for successful completion
+
         return int(self.s), reward, terminated, False, {}
 
     def _move(self, row: int, col: int, action: int):
         new_row, new_col = row, col
         illegal = 0
-        if action == 0 and row < 4:
-            row += 1
-        elif action == 1 and row > 0:
-            row -= 1
-        elif action == 2 and col < 4 and self.desc[1 + row, 2 * col + 2] == b":":
-            col += 1
-        elif action == 3 and col > 0 and self.desc[1 + row, 2 * col] == b":":
-            col -= 1
+
+        if action == 0 and row < 4:  # Move down
+            new_row = row + 1
+        elif action == 1 and row > 0:  # Move up
+            new_row = row - 1
+        elif action == 2 and col < 4 and self.desc[1 + row, 2 * col + 2] == b":":  # Move right
+            new_col = col + 1
+        elif action == 3 and col > 0 and self.desc[1 + row, 2 * col] == b":":  # Move left
+            new_col = col - 1
         else:
-            if action in (2, 3):
-                illegal = -10
+            # Invalid movement (hitting wall or boundary)
+            if action in (0, 1, 2, 3):  # Only penalize actual movement actions
+                illegal = -10 # Penalty for hitting a wall
+
+        # Check if new position hits an obstacle
         if (new_row, new_col) in self.obstacles:
-            illegal = -10
-            return row, col, illegal
-        
-        return row, col, illegal
+            illegal = -10 # Penalty for hitting an obstacle
+            return row, col, illegal  # Stay in original position
+
+        return new_row, new_col, illegal
 
     def _render_gui(self, mode):
         if self.window is None:
@@ -131,7 +191,7 @@ class TaxiTwoPassengerEnv(TaxiEnv):
         if self.clock is None:
             self.clock = pygame.time.Clock()
 
-        
+
         WHITE, BLACK = (255,255,255), (0,0,0)
         YELLOW, ORANGE = (255,255,0), (255,165,0)
         RED, GREEN, BLUE = (255,0,0), (0,200,0), (0,0,255)
@@ -150,12 +210,19 @@ class TaxiTwoPassengerEnv(TaxiEnv):
             rect = pygame.Rect(cc*cell_w+10, rr*cell_h+10, cell_w-20, cell_h-20)
             pygame.draw.rect(self.window, dest_colors[idx], rect, width=border)
         def pos(i): return self.locs[i][1], self.locs[i][0]
-        if p1<4:
+        if p1<4: # Passenger 1 is at a location
             cx,cy = pos(p1)
             pygame.draw.circle(self.window, BLACK, (cx*cell_w+cell_w//2, cy*cell_h+cell_h//2),10)
-        if p2<4:
+        elif self.passengers_delivered[0]: # Passenger 1 delivered, render at destination
+            cx,cy = pos(d1)
+            pygame.draw.circle(self.window, BLACK, (cx*cell_w+cell_w//2, cy*cell_h+cell_h//2),10, width=2) # outline
+        if p2<4: # Passenger 2 is at a location
             cx,cy = pos(p2)
             pygame.draw.circle(self.window, ORANGE, (cx*cell_w+cell_w//2, cy*cell_h+cell_h//2),10)
+        elif self.passengers_delivered[1]: # Passenger 2 delivered, render at destination
+            cx,cy = pos(d2)
+            pygame.draw.circle(self.window, ORANGE, (cx*cell_w+cell_w//2, cy*cell_h+cell_h//2),10, width=2) # outline
+
         taxi_rect = pygame.Rect(col*cell_w+20, row*cell_h+20, cell_w-40, cell_h-40)
         pygame.draw.rect(self.window, YELLOW, taxi_rect)
         if self.passenger_in_taxi==0:
